@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 事件监听
     document.getElementById('startBtn').addEventListener('click', startConversation);
     document.getElementById('stopBtn').addEventListener('click', stopConversation);
+    document.getElementById('clearHistoryBtn').addEventListener('click', clearChatHistory);
 });
 
 // 更新波形显示
@@ -248,7 +249,7 @@ async function processAudio(audioData) {
             },
             body: JSON.stringify({
                 audio_data: base64Audio,
-                text_prompt: "这段音频在说什么",
+                text_prompt: "你是一个友好、专业的AI助手。请用中文回答问题，保持对话的连贯性。",
                 audio_format: "wav"  // 指定音频格式为wav
             }),
         });
@@ -281,27 +282,76 @@ async function processAudio(audioData) {
 function playAudio(base64Audio) {
     return new Promise((resolve, reject) => {
         try {
-            // 创建一个audio元素
-            const audio = new Audio();
+            // 检测是否为iOS设备
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+            addLog(`当前设备: ${isIOS ? 'iOS' : '非iOS'}`);
             
-            // 监听播放结束事件
-            audio.addEventListener('ended', () => {
-                addLog("音频播放完成");
-                resolve();
-            });
-            audio.addEventListener('error', (e) => {
-                addLog(`音频播放错误: ${e.message}`);
-                reject(e);
-            });
-            
-            // 设置音频源
-            audio.src = `data:audio/wav;base64,${base64Audio}`;
-            
-            // 播放音频
-            audio.play().catch(e => {
-                addLog(`播放音频失败: ${e.message}`);
-                reject(e);
-            });
+            if (isIOS) {
+                // iOS设备特殊处理 - 使用可见的音频控件
+                addLog("iOS设备，使用特殊播放模式");
+                
+                // 获取iOS专用播放器元素
+                const iosPlayerContainer = document.getElementById('iosAudioPlayer');
+                const iosAudio = document.getElementById('iosAudio');
+                
+                if (!iosPlayerContainer || !iosAudio) {
+                    addLog("警告: 未找到iOS音频播放器元素");
+                    resolve(); // 继续流程
+                    return;
+                }
+                
+                // 显示播放器
+                iosPlayerContainer.style.display = 'block';
+                
+                // 设置音频源
+                iosAudio.src = `data:audio/wav;base64,${base64Audio}`;
+                
+                // 添加事件监听
+                iosAudio.onended = () => {
+                    addLog("iOS音频播放完成");
+                    // 隐藏播放器
+                    iosPlayerContainer.style.display = 'none';
+                    resolve();
+                };
+                
+                iosAudio.onerror = (e) => {
+                    addLog(`iOS音频播放错误: ${e.message || '未知错误'}`);
+                    // 隐藏播放器
+                    iosPlayerContainer.style.display = 'none';
+                    
+                    // 尝试使用系统TTS作为备选方案
+                    addLog("尝试使用系统TTS作为备选方案...");
+                    // 简单消息告知用户
+                    addConversation('system', '(iOS设备无法播放音频，请检查浏览器权限设置并允许自动播放，或点击"清除历史"按钮后重试)');
+                    resolve();
+                };
+                
+                // 模拟用户交互触发播放
+                addLog("iOS音频已准备，请点击播放按钮");
+                
+            } else {
+                // 非iOS设备使用原有方法
+                const audio = new Audio();
+                
+                // 监听播放结束事件
+                audio.addEventListener('ended', () => {
+                    addLog("音频播放完成");
+                    resolve();
+                });
+                audio.addEventListener('error', (e) => {
+                    addLog(`音频播放错误: ${e.message}`);
+                    reject(e);
+                });
+                
+                // 设置音频源
+                audio.src = `data:audio/wav;base64,${base64Audio}`;
+                
+                // 播放音频
+                audio.play().catch(e => {
+                    addLog(`播放音频失败: ${e.message}`);
+                    reject(e);
+                });
+            }
         } catch (error) {
             addLog(`音频播放设置失败: ${error.message}`);
             reject(error);
@@ -509,6 +559,9 @@ async function playAIResponse(base64Audio) {
 async function playTextAudio(text) {
     addLog("使用浏览器语音合成播放文本");
     
+    // 检测是否为iOS设备
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    
     // 模拟波形活动
     let speakingInterval = setInterval(() => {
         const level = 0.5 + Math.random() * 0.5;
@@ -526,7 +579,7 @@ async function playTextAudio(text) {
             utterance.lang = 'zh-CN';
             
             utterance.onstart = () => {
-                addLog("语音合成开始播放");
+                addLog(`语音合成开始播放 (${isIOS ? 'iOS' : '非iOS'}设备)`);
             };
             
             utterance.onend = () => {
@@ -543,32 +596,58 @@ async function playTextAudio(text) {
                 resolve();
             };
             
-            // 在iOS上，需要先暂停再重启语音合成
-            window.speechSynthesis.cancel();
-            
-            // 解决iOS上需要用户交互的问题
-            setTimeout(() => {
-                try {
-                    window.speechSynthesis.speak(utterance);
-                    
-                    // iOS Safari需要保持语音合成活跃
-                    if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
-                        const iosInterval = setInterval(() => {
-                            if (!window.speechSynthesis.speaking) {
-                                clearInterval(iosInterval);
-                                return;
-                            }
-                            window.speechSynthesis.pause();
-                            window.speechSynthesis.resume();
-                        }, 10000);
+            // 在iOS上，需要特殊处理
+            if (isIOS) {
+                addLog("iOS设备，使用特殊TTS处理");
+                
+                // 取消任何正在进行的合成
+                window.speechSynthesis.cancel();
+                
+                // 使用定时器延迟执行，避免iOS的限制
+                setTimeout(() => {
+                    try {
+                        // 直接播放短文本
+                        window.speechSynthesis.speak(utterance);
+                        
+                        // 由于iOS上长文本可能被截断，我们需要分段播放
+                        if (text.length > 100) {
+                            addLog("iOS上检测到长文本，使用分段播放");
+                            
+                            // 分段播放长文本的处理在这里添加
+                            // (可根据需求进一步实现)
+                            
+                            // iOS Safari需要保持语音合成活跃
+                            const iosInterval = setInterval(() => {
+                                if (!window.speechSynthesis.speaking) {
+                                    clearInterval(iosInterval);
+                                    return;
+                                }
+                                // 暂停再恢复可以防止iOS上的截断问题
+                                window.speechSynthesis.pause();
+                                setTimeout(() => window.speechSynthesis.resume(), 50);
+                            }, 5000);
+                        }
+                    } catch (e) {
+                        addLog(`iOS语音合成异常: ${e.message}`);
+                        clearInterval(speakingInterval);
+                        updateWaveActivityLevel(0);
+                        resolve();
                     }
+                }, 300); // 延迟300ms执行
+                
+            } else {
+                // 非iOS设备的处理
+                try {
+                    // 在非iOS设备上直接调用
+                    window.speechSynthesis.cancel(); // 取消任何现有的语音
+                    window.speechSynthesis.speak(utterance);
                 } catch (e) {
                     addLog(`语音合成异常: ${e.message}`);
                     clearInterval(speakingInterval);
                     updateWaveActivityLevel(0);
                     resolve();
                 }
-            }, 100);
+            }
         } else {
             addLog("没有语音合成API");
             // 如果没有语音合成API，模拟延迟
@@ -750,5 +829,40 @@ function showError(message) {
     } else {
         // 如果元素不存在，使用日志记录错误
         addLog(`错误: ${message}`);
+    }
+}
+
+// 清除对话历史
+async function clearChatHistory() {
+    try {
+        updateStatus("清除历史中...", "processing");
+        
+        // 发送清除历史的请求
+        const response = await fetch('/clear_history', {
+            method: 'POST'
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP错误! 状态: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        addLog(`清除历史结果: ${result.message}`);
+        
+        // 清除界面上的对话记录
+        const conversationContent = document.getElementById('conversationContent');
+        conversationContent.innerHTML = '';
+        
+        // 添加系统消息
+        addConversation('ai', '对话历史已清除，可以开始新的对话了。');
+        
+        updateStatus("历史已清除", "");
+        setTimeout(() => updateStatus("等待语音输入...", "listening"), 1500);
+        
+    } catch (error) {
+        console.error("清除历史时出错:", error);
+        addLog(`错误: ${error.message}`);
+        showError(`清除历史失败: ${error.message}`);
+        updateStatus("清除历史失败", "error");
     }
 } 

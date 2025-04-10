@@ -81,6 +81,16 @@ async def process_audio(request: AudioRequest):
         logger.error(f"处理音频时出错: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/clear_history")
+async def clear_chat_history():
+    """清除对话历史记录"""
+    try:
+        audio_agent.clear_history()
+        return {"status": "success", "message": "对话历史已清除"}
+    except Exception as e:
+        logger.error(f"清除对话历史时出错: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/health")
 async def health_check():
     """健康检查端点"""
@@ -96,5 +106,25 @@ if __name__ == "__main__":
     # 获取端口，默认为8000
     port = int(os.environ.get("PORT", 8000))
     
-    # 启动服务器
-    uvicorn.run(app, host="0.0.0.0", port=port) 
+    # 检查是否存在SSL证书和密钥
+    ssl_keyfile = os.environ.get("SSL_KEYFILE", "key.pem")
+    ssl_certfile = os.environ.get("SSL_CERTFILE", "cert.pem")
+    
+    # 如果证书和密钥文件存在，则启用HTTPS
+    ssl_enabled = os.path.exists(ssl_keyfile) and os.path.exists(ssl_certfile)
+    
+    if ssl_enabled:
+        logger.info(f"使用HTTPS启动服务，证书: {ssl_certfile}, 密钥: {ssl_keyfile}")
+        # 启动HTTPS服务器
+        uvicorn.run(app, host="0.0.0.0", port=port, ssl_keyfile=ssl_keyfile, ssl_certfile=ssl_certfile)
+    else:
+        logger.warning(
+            "未找到SSL证书和密钥文件，将使用HTTP启动服务。"
+            "注意: 浏览器中使用麦克风功能需要HTTPS连接。"
+            "可以使用以下命令生成自签名证书:\n"
+            "choco install mkcert  # Windows\n"
+            "brew install mkcert   # MacOS\n"
+            "mkcert -key-file key.pem -cert-file cert.pem localhost 127.0.0.1 ::1 你的IP地址"
+        )
+        # 启动HTTP服务器
+        uvicorn.run(app, host="0.0.0.0", port=port) 

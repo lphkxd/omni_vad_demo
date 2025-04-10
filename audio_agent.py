@@ -66,8 +66,12 @@ class AudioProcessingAgent(Agent):
     def __init__(self):
         super().__init__()
         self.client = get_openai_client()
+        # 初始化聊天历史记录
+        self.chat_history = []
+        # 最大保存的对话轮数
+        self.max_history = 5
     
-    def process_audio(self, audio_data: bytes, text_prompt: str = "这段音频在说什么", audio_format: str = "webm") -> Dict[str, Any]:
+    def process_audio(self, audio_data: bytes, text_prompt: str = "", audio_format: str = "webm") -> Dict[str, Any]:
         """处理音频并调用模型获取回复
         
         Args:
@@ -88,31 +92,40 @@ class AudioProcessingAgent(Agent):
             
             print(f"发送请求到模型，音频大小: {len(audio_data)} 字节，格式: {audio_format}")
             
+            # 构建消息列表，包含历史记录
+            messages = [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "你是一个友好、专业的AI助手。请用中文回答问题，保持对话的连贯性。"}],
+                },
+            ]
+            
+            # 添加历史消息
+            for msg in self.chat_history:
+                messages.append(msg)
+                
+            # 添加当前用户消息
+            messages.append({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": f"data:;base64,{base64_audio}",
+                            "format": audio_format,
+                        },
+                    },
+                    {"type": "text", "text": text_prompt},
+                ],
+            })
+            
             # 调用模型
             model_start = time.time()
             completion = self.client.chat.completions.create(
                 model="qwen-omni-turbo",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": [{"type": "text", "text": "You are a helpful assistant."}],
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_audio",
-                                "input_audio": {
-                                    "data": f"data:;base64,{base64_audio}",
-                                    "format": audio_format,
-                                },
-                            },
-                            {"type": "text", "text": text_prompt},
-                        ],
-                    },
-                ],
+                messages=messages,
                 modalities=["text", "audio"],
-                audio={"voice": "Cherry", "format": "wav"},
+                audio={"voice": "Chelsie", "format": "wav"},
                 stream=True,
                 stream_options={"include_usage": True},
             )
@@ -184,15 +197,45 @@ class AudioProcessingAgent(Agent):
                 response["text"] = transcript_text
                 print(f"使用转录文本作为响应: {transcript_text}")
             
+            # 更新对话历史
+            if transcript_text:
+                # 添加用户消息（使用转录的文本）
+                self.chat_history.append({
+                    "role": "user",
+                    "content": [{"type": "text", "text": transcript_text}]
+                })
+            else:
+                # 如果没有转录文本，使用提示文本
+                self.chat_history.append({
+                    "role": "user", 
+                    "content": [{"type": "text", "text": text_prompt}]
+                })
+            
+            # 添加助手回复
+            self.chat_history.append({
+                "role": "assistant",
+                "content": [{"type": "text", "text": response["text"]}]
+            })
+            
+            # 保持历史长度在限制范围内
+            if len(self.chat_history) > self.max_history * 2:  # 每轮对话有2条消息
+                self.chat_history = self.chat_history[-self.max_history*2:]
+            
             total_time = time.time() - start_time
             print(f"总处理时间: {total_time:.2f}秒")
             print(f"最终文本响应: {response['text']}")
+            print(f"当前对话历史数量: {len(self.chat_history)//2} 轮")
             
             return response
             
         except Exception as e:
             print(f"处理音频时出错: {e}")
             raise
+            
+    def clear_history(self):
+        """清除对话历史"""
+        self.chat_history = []
+        print("对话历史已清除")
 
 # 实例化Agent
 audio_agent = AudioProcessingAgent()

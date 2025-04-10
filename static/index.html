@@ -16,6 +16,10 @@
             <div id="status" class="status">等待语音输入...</div>
             <div id="statusIndicator" class="status-indicator"></div>
             <div id="errorMsg" class="error-message" style="display:none;"></div>
+            <div id="iosAudioPlayer" class="ios-audio-player" style="display:none;">
+                <p class="ios-hint">iOS设备需要点击播放按钮:</p>
+                <audio id="iosAudio" controls></audio>
+            </div>
         </div>
       
         <div id="audioWave">
@@ -38,6 +42,9 @@
             </button>
             <button id="stopBtn" disabled>
                 <span>结束对话</span>
+            </button>
+            <button id="clearHistoryBtn">
+                <span>清除历史</span>
             </button>
         </div>
       
