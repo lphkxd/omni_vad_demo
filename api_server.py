@@ -3,8 +3,9 @@ import base64
 import uvicorn
 import time
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from typing import Optional
 from pydantic import BaseModel
@@ -26,6 +27,9 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 app = FastAPI(title="音频处理API", description="处理音频并通过大模型获取回复的API服务")
 
+# 添加Gzip压缩中间件，对大于1000字节的响应进行压缩，提高传输效率
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 # 添加CORS中间件
 app.add_middleware(
     CORSMiddleware,
@@ -37,6 +41,12 @@ app.add_middleware(
 
 # 挂载静态文件
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# 添加favicon.ico路由
+@app.get("/favicon.ico")
+async def get_favicon():
+    """处理favicon.ico请求"""
+    return RedirectResponse(url="/static/favicon.svg")
 
 class AudioRequest(BaseModel):
     audio_data: str
