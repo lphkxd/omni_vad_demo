@@ -14,12 +14,15 @@ def get_openai_client():
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     )
 
-def add_wav_header(audio_data: bytes, sample_rate: int = 24000) -> bytes:
-    """添加WAV文件头"""
+# 预缓存常用采样率的WAV头
+WAV_HEADERS = {}
+
+def generate_wav_header(sample_rate: int = 24000) -> bytes:
+    """生成WAV文件头"""
     # WAV文件头格式
     # RIFF header
     riff_header = b'RIFF'
-    file_size = len(audio_data) + 36  # 文件总长度减去8字节
+    file_size_placeholder = struct.pack('<I', 0)  # 占位，实际使用时会替换
     wave_header = b'WAVE'
     
     # fmt chunk
@@ -33,12 +36,12 @@ def add_wav_header(audio_data: bytes, sample_rate: int = 24000) -> bytes:
     
     # data chunk
     data_header = b'data'
-    data_chunk_size = len(audio_data)
+    data_chunk_size_placeholder = struct.pack('<I', 0)  # 占位，实际使用时会替换
     
-    # 构建WAV头
+    # 构建WAV头部分（不包含文件大小和数据大小）
     header = (
         riff_header +
-        struct.pack('<I', file_size) +
+        file_size_placeholder +
         wave_header +
         fmt_header +
         struct.pack('<I', fmt_chunk_size) +
@@ -49,10 +52,34 @@ def add_wav_header(audio_data: bytes, sample_rate: int = 24000) -> bytes:
         struct.pack('<H', block_align) +
         struct.pack('<H', bits_per_sample) +
         data_header +
-        struct.pack('<I', data_chunk_size)
+        data_chunk_size_placeholder
     )
     
-    return header + audio_data
+    return header
+
+# 初始化常用采样率的WAV头缓存
+for sr in [24000, 16000, 44100, 48000]:
+    WAV_HEADERS[sr] = generate_wav_header(sr)
+
+def add_wav_header(audio_data: bytes, sample_rate: int = 24000) -> bytes:
+    """添加WAV文件头，使用预缓存的头部"""
+    # 如果没有预缓存当前采样率的头部，生成一个
+    if sample_rate not in WAV_HEADERS:
+        WAV_HEADERS[sample_rate] = generate_wav_header(sample_rate)
+    
+    # 获取预缓存的头部
+    header_template = WAV_HEADERS[sample_rate]
+    
+    # 计算文件大小和数据大小
+    data_chunk_size = len(audio_data)
+    file_size = data_chunk_size + 36  # 文件总长度减去8字节
+    
+    # 创建包含正确大小信息的头部
+    header = bytearray(header_template)
+    struct.pack_into('<I', header, 4, file_size)  # 在位置4写入文件大小
+    struct.pack_into('<I', header, 40, data_chunk_size)  # 在位置40写入数据大小
+    
+    return bytes(header) + audio_data
 
 # 音频编码函数
 def encode_audio(audio_data):
@@ -85,13 +112,8 @@ class AudioProcessingAgent(Agent):
         """
         start_time = time.time()
         try:
-            # 将音频数据编码为base64
-            # api_server.py中已经处理过base64解码，这里直接使用传入的音频数据
-            encode_start = time.time()
-            base64_audio = base64.b64encode(audio_data).decode("utf-8")
-            encode_time = time.time() - encode_start
-            print(f"音频编码耗时: {encode_time:.2f}秒")
-            
+            # api_server.py中已经处理了base64解码，直接使用传入的音频数据
+            # 移除重复的base64编码操作
             print(f"发送请求到模型，音频大小: {len(audio_data)} 字节，格式: {audio_format}")
             
             # 构建消息列表，包含历史记录
@@ -107,6 +129,8 @@ class AudioProcessingAgent(Agent):
                 messages.append(msg)
                 
             # 添加当前用户消息
+            # 这里仍需要编码，因为API需要base64格式
+            base64_audio = base64.b64encode(audio_data).decode("utf-8")
             messages.append({
                 "role": "user",
                 "content": [
