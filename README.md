@@ -1,139 +1,153 @@
-# 语音AI对话系统
+# 智能语音对话系统
 
-这是一个基于语音识别和大语言模型的交互式对话系统，允许用户通过语音与AI助手进行自然对话。系统使用浏览器内置的VAD(语音活动检测)功能识别用户语音，通过阿里云Qwen大模型API处理并生成回复，支持文本和语音双模态响应。
+基于阿里云千问Qwen-Omni模型的网页端语音对话系统，支持实时语音识别、自然语言处理和语音合成。
 
-## 功能特性
+## 功能特点
 
-- 🎤 **实时语音检测**：自动检测和处理用户语音输入
-- 🧠 **智能对话处理**：使用强大的大语言模型理解和回应用户查询
-- 🔊 **语音合成回复**：支持AI回复的文本到语音转换
-- 📝 **对话历史记录**：保存对话历史，实现连贯的多轮对话
-- 🌐 **HTTPS支持**：提供安全连接，允许浏览器访问麦克风
-- 📊 **实时状态反馈**：直观显示系统处理状态和错误信息
+- **实时语音检测**：采用VAD (Voice Activity Detection) 技术，自动检测用户语音
+- **语音识别与合成**：将用户语音转为文本，模型回复同时支持文本与语音输出
+- **多轮对话记忆**：保留最近5轮对话历史，提供连贯的交互体验
+- **优化的性能**：
+  - TCP连接保持活跃，减少连接建立时间
+  - WAV头预缓存，优化音频处理
+  - 响应GZip压缩，减少网络传输量
+  - 对话历史管理，限制内存使用
 
-## 系统要求
+## 系统架构
 
-- Python 3.8+
-- 现代浏览器（Chrome、Firefox、Edge等）
-- 麦克风设备
-- 互联网连接
-- [DashScope API密钥](https://dashscope.aliyun.com/)（阿里云通义千问API）
+### 后端组件
 
-## 快速开始
+- **api_server.py**: FastAPI服务器，处理HTTP请求，提供REST API
+- **audio_agent.py**: 核心音频处理代理，与千问大模型交互
 
-### 1. 克隆仓库
+### 前端组件
 
-```bash
-git clone https://github.com/yourusername/omni_vad_demo.git
-cd omni_vad_demo
-```
+- **static/index.html**: 主页面
+- **static/js/app.js**: 主应用逻辑，处理用户界面与交互
+- **static/css/**: 样式文件
+- **static/favicon.svg**: 网站图标
 
-### 2. 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-### 3. 配置环境变量
-
-设置DashScope API密钥：
-
-```bash
-# Windows
-set DASHSCOPE_API_KEY=your_api_key_here
-
-# Linux/macOS
-export DASHSCOPE_API_KEY=your_api_key_here
-```
-
-### 4. 启动服务器
-
-#### 使用HTTPS（推荐，支持麦克风访问）
-
-Windows:
-```bash
-start_https_server.bat
-```
-
-Linux/macOS:
-```bash
-chmod +x start_https_server.sh
-./start_https_server.sh
-```
-
-> **注意**: 首次启动需要安装mkcert并生成自签名证书。脚本会指导您完成此过程。
-
-#### 使用HTTP（仅用于测试，麦克风功能受限）
-
-```bash
-python api_server.py
-```
-
-### 5. 访问应用
-
-使用浏览器访问:
-- HTTPS模式: `https://localhost:8000` 或 `https://你的IP地址:8000`
-- HTTP模式: `http://localhost:8000` 或 `http://你的IP地址:8000`
-
-## 使用指南
-
-1. 点击"启动对话"按钮开始会话
-2. 允许浏览器访问麦克风（如提示）
-3. 开始说话，系统会自动检测语音并处理
-4. AI将通过文本和语音方式回复
-5. 点击"清除历史"按钮可重置对话上下文
-6. 点击"结束对话"停止语音检测
-
-## 项目结构
+### 文件结构
 
 ```
 omni_vad_demo/
-├── api_server.py          # 主服务器应用
-├── audio_agent.py         # 音频处理和AI接口
-├── start_https_server.bat # Windows HTTPS启动脚本
-├── start_https_server.sh  # Linux/macOS HTTPS启动脚本
-├── key.pem                # SSL密钥（自动生成）
-├── cert.pem               # SSL证书（自动生成）
-├── static/                # 前端资源
-│   ├── index.html         # 主页面
-│   ├── css/               # 样式表
-│   └── js/                # JavaScript文件
-│       └── app.js         # 前端主逻辑
-└── README.md              # 项目说明
+├── api_server.py        # FastAPI服务器入口
+├── audio_agent.py       # 音频处理代理
+├── requirements.txt     # Python依赖
+├── start_https_server.sh  # Linux/Mac启动脚本
+├── start_https_server.bat # Windows启动脚本
+├── cert.pem             # SSL证书
+├── key.pem              # SSL密钥
+├── static/              # 静态资源目录
+│   ├── index.html       # 主HTML页面
+│   ├── favicon.svg      # 网站图标
+│   ├── css/             # CSS样式
+│   └── js/              # JavaScript文件
+│       └── app.js       # 主应用逻辑
+└── archive/             # 归档的冗余文件
+    ├── base64_decode.py # 测试脚本
+    ├── hello.py         # 测试脚本
+    ├── main.py          # 旧版服务器
+    ├── audio-client.js  # 旧版音频客户端库
+    └── vad_test.html    # 旧版HTML页面
 ```
 
-## 技术细节
+## 安装部署
 
-- **后端**: FastAPI, Python
-- **前端**: HTML, CSS, JavaScript
-- **语音处理**: Web Audio API, VAD (Voice Activity Detection)
-- **AI模型**: 阿里云Qwen-Omni模型（通过DashScope API）
-- **语音合成**: 浏览器原生TTS + 阿里云语音合成
+### 环境要求
 
-## 常见问题
+- Python 3.8+
+- 阿里云千问API密钥
+- HTTPS支持（浏览器中使用麦克风需要HTTPS）
 
-### 无法访问麦克风
+### 步骤
 
-浏览器只允许在安全环境（HTTPS或localhost）下访问麦克风。请使用HTTPS模式或确保通过localhost访问。
+1. **克隆仓库并安装依赖**:
 
-### 证书警告
+```bash
+git clone <仓库URL>
+cd omni_vad_demo
+pip install -r requirements.txt
+```
 
-由于使用自签名证书，浏览器可能显示安全警告。这是正常的，您可以选择"继续访问"。
+2. **配置API密钥**:
 
-### 语音识别问题
+设置环境变量`DASHSCOPE_API_KEY`为您的阿里云千问API密钥:
 
-确保您的麦克风工作正常，并且在相对安静的环境中使用。系统需要清晰的语音输入。
+```bash
+# Linux/Mac
+export DASHSCOPE_API_KEY="你的API密钥"
 
-### API限制
+# Windows
+set DASHSCOPE_API_KEY=你的API密钥
+```
 
-免费的DashScope API有使用限制。如果遇到API错误，可能是达到了调用限制。
+3. **HTTPS证书配置**:
 
-## 许可证
+对于本地开发，可以使用mkcert生成自签名证书:
 
-[MIT](LICENSE)
+```bash
+# 安装mkcert
+# Windows: choco install mkcert
+# MacOS: brew install mkcert
 
-## 致谢
+# 生成证书
+mkcert -key-file key.pem -cert-file cert.pem localhost 127.0.0.1 ::1 你的IP地址
+```
 
-- [VAD-Web](https://github.com/ricky0123/vad-web) - 提供浏览器端语音活动检测
-- [FastAPI](https://fastapi.tiangolo.com/) - 高性能API框架
-- [阿里云DashScope](https://dashscope.aliyun.com/) - 提供AI模型服务
+4. **启动服务**:
+
+```bash
+# Windows
+.\start_https_server.bat
+
+# Linux/Mac
+./start_https_server.sh
+```
+
+默认情况下，服务将在`https://localhost:8000`上运行。
+
+## 使用方法
+
+1. 使用HTTPS在浏览器中访问服务
+2. 点击"启动对话"按钮授予麦克风权限
+3. 开始说话，系统会自动检测语音并处理
+4. 点击"清除历史"按钮可以开始新的对话
+5. 点击"结束对话"按钮停止服务
+
+## 性能优化
+
+系统已进行多项性能优化:
+
+1. **TCP连接优化**:
+   - 保持TCP连接活跃，减少重连开销
+   - 设置超时控制，避免资源浪费
+
+2. **音频处理优化**:
+   - WAV头预缓存，避免重复生成
+   - 使用BytesIO减少内存使用
+
+3. **响应优化**:
+   - GZip压缩响应，减少网络传输
+   - 对话历史限制，控制内存使用
+
+4. **提示词优化**:
+   - 避免重复提示词，提高对话效率
+   - 系统提示词指导模型更简洁回答
+
+## 注意事项
+
+- 浏览器访问必须使用HTTPS（因为麦克风访问需要安全上下文）
+- 确保API密钥有效且有足够的调用额度
+- iOS设备可能需要用户交互才能播放音频
+- 项目默认限制对话历史为5轮
+- 若要支持多进程，使用命令行启动:`uvicorn api_server:app --host=0.0.0.0 --port=8000 --ssl-keyfile=key.pem --ssl-certfile=cert.pem --workers=4`
+
+## 技术详情
+
+- 前端使用纯JavaScript，无框架依赖
+- 使用WebAPI MediaRecorder录制音频
+- 使用@ricky0123/vad-web进行语音活动检测
+- 使用WebAPI SpeechSynthesis作为备用语音合成
+- 后端使用FastAPI和Uvicorn
+- 使用OpenAI兼容方式调用阿里云千问模型
