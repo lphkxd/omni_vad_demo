@@ -1,0 +1,9 @@
+numpy
+openai
+pyaudio
+soundfile
+fastapi
+uvicorn
+agno
+python-multipart
+requests 

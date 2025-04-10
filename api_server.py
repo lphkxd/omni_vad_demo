@@ -36,14 +36,15 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 class AudioRequest(BaseModel):
     audio_data: str
     text_prompt: str = "这段音频在说什么"
+    audio_format: str = "webm"  # 默认使用webm格式，前端现在发送的是wav
 
 @app.post("/process_audio")
 async def process_audio(request: AudioRequest):
     start_time = time.time()
     try:
-        # 记录请求大小
+        # 记录请求大小和格式
         request_size = len(request.audio_data)
-        logger.info(f"收到音频数据，大小: {request_size} 字节")
+        logger.info(f"收到音频数据，大小: {request_size} 字节，格式: {request.audio_format}")
         
         # 解码base64音频数据
         decode_start = time.time()
@@ -51,9 +52,9 @@ async def process_audio(request: AudioRequest):
         decode_time = time.time() - decode_start
         logger.info(f"base64解码耗时: {decode_time:.2f}秒")
         
-        # 处理音频
+        # 处理音频，传递格式参数
         process_start = time.time()
-        result = audio_agent.process_audio(audio_bytes, request.text_prompt)
+        result = audio_agent.process_audio(audio_bytes, request.text_prompt, request.audio_format)
         process_time = time.time() - process_start
         logger.info(f"音频处理耗时: {process_time:.2f}秒")
         

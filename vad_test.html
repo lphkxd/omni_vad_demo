@@ -441,6 +441,13 @@
         let isVADPaused = false;
         let waveBars = [];
         
+        // API配置
+        const apiConfig = {
+            apiUrl: window.location.origin, // 使用当前域名作为API的基础URL
+            processingEndpoint: '/process_audio',
+            debug: true
+        };
+        
         // 初始化页面元素
         document.addEventListener('DOMContentLoaded', () => {
             waveBars = Array.from(document.querySelectorAll('.wave-bar'));
@@ -482,6 +489,109 @@
         
         let waveInterval = simulateWaveform();
         
+        // 将Blob转换为Base64
+        function blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    // 移除data URL前缀
+                    const base64 = reader.result.split(',')[1];
+                    resolve(base64);
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+        
+        // 将音频发送到服务器处理
+        async function processAudio(audioBlob, options = {}) {
+            if (!audioBlob) {
+                addLog("错误: 没有音频数据");
+                return Promise.reject(new Error('没有音频数据'));
+            }
+
+            try {
+                // 将Blob转换为Base64
+                const base64Audio = await blobToBase64(audioBlob);
+                addLog(`音频转换为Base64完成，大小: ${base64Audio.length} 字符`);
+                
+                // 准备请求数据
+                const requestData = {
+                    audio_data: base64Audio,
+                    text_prompt: options.prompt || '这段音频在说什么'
+                };
+
+                addLog(`发送请求到API: ${apiConfig.apiUrl}${apiConfig.processingEndpoint}`);
+                
+                // 发送请求，添加超时处理
+                const timeout = 120000; // 120秒超时
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+                const response = await fetch(`${apiConfig.apiUrl}${apiConfig.processingEndpoint}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestData),
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP错误! 状态: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                addLog(`收到API响应: 文本长度: ${result.text.length} 字符`);
+                
+                if (result.audio) {
+                    addLog(`收到音频响应，大小: ${result.audio.length} 字符`);
+                }
+                
+                return result;
+            } catch (error) {
+                addLog(`处理音频请求出错: ${error.message}`);
+                if (error.name === 'AbortError') {
+                    throw new Error('请求超时');
+                }
+                throw error;
+            }
+        }
+        
+        // 播放Base64编码的音频
+        function playAudio(base64Audio) {
+            return new Promise((resolve, reject) => {
+                try {
+                    // 创建一个audio元素
+                    const audio = new Audio();
+                    
+                    // 监听播放结束事件
+                    audio.addEventListener('ended', () => {
+                        addLog("音频播放完成");
+                        resolve();
+                    });
+                    audio.addEventListener('error', (e) => {
+                        addLog(`音频播放错误: ${e.message}`);
+                        reject(e);
+                    });
+                    
+                    // 设置音频源
+                    audio.src = `data:audio/wav;base64,${base64Audio}`;
+                    
+                    // 播放音频
+                    audio.play().catch(e => {
+                        addLog(`播放音频失败: ${e.message}`);
+                        reject(e);
+                    });
+                } catch (error) {
+                    addLog(`音频播放设置失败: ${error.message}`);
+                    reject(error);
+                }
+            });
+        }
+        
         // 初始化VAD
         async function initVAD() {
             try {
@@ -518,21 +628,48 @@
                             addLog(`错误: 暂停VAD失败 - ${e.message}`);
                         }
                         
-                        // 模拟处理过程
-                        setTimeout(async () => {
+                        try {
+                            // 将WebRTC音频数据转换为Blob
+                            const audioBlob = new Blob([audio.audioData], { type: 'audio/webm' });
+                            addLog(`音频长度: ${audio.audioData.byteLength} 字节`);
+                            
+                            // 将用户语音转写添加到对话
+                            if (audio.transcript) {
+                                addConversation('user', audio.transcript);
+                            } else {
+                                addConversation('user', '(语音内容不可获取)');
+                            }
+                            
+                            // 发送到API处理
+                            const result = await processAudio(audioBlob, {
+                                prompt: "这段音频在说什么，请用中文回复"
+                            });
+                            
                             // 隐藏正在输入指示器
                             hideTypingIndicator();
                             
-                            // 模拟AI响应
-                            const responseText = "这是 A I 的模拟响应。我正在处理您的请求，这是一个更长的响应，用于测试UI布局和滚动行为。";
-                            addConversation('ai', responseText);
-                          
-                            // 播放AI响应前确保VAD保持暂停状态
-                            await playAIResponse(responseText);
-                          
+                            // 添加AI响应到对话
+                            addConversation('ai', result.text);
+                            
+                            // 如果有音频响应，播放它
+                            if (result.audio) {
+                                await playAIResponse(result.audio);
+                            } else {
+                                // 如果没有音频，使用浏览器的TTS
+                                updateStatus("AI正在说话...", "speaking");
+                                await playTextAudio(result.text);
+                                updateStatus("等待语音输入...", "");
+                            }
+                            
                             // 播放完成后恢复VAD
                             resumeVAD();
-                        }, 2000);
+                        } catch (error) {
+                            console.error("处理音频时出错:", error);
+                            addLog(`错误: ${error.message}`);
+                            hideTypingIndicator();
+                            addConversation('ai', "很抱歉，处理您的请求时出错。请再试一次。");
+                            resumeVAD();
+                        }
                     },
                     // 其他VAD配置参数
                     positiveSpeechThreshold: 0.70,
@@ -596,10 +733,10 @@
             }
         }
         
-        // 播放AI响应（模拟实现）
-        async function playAIResponse(text) {
+        // 播放AI响应从服务器返回的音频
+        async function playAIResponse(base64Audio) {
             updateStatus("AI正在说话...", "speaking");
-            addLog("开始播放AI响应");
+            addLog("开始播放AI响应音频");
             
             // 模拟波形活动
             let speakingInterval = setInterval(() => {
@@ -607,19 +744,38 @@
                 updateWaveform(level);
             }, 100);
             
-            // 使用Web Speech API模拟播放
+            try {
+                await playAudio(base64Audio);
+                addLog("AI响应音频播放完成");
+            } catch (error) {
+                addLog(`播放音频失败: ${error.message}`);
+            } finally {
+                clearInterval(speakingInterval);
+                updateWaveform(0);
+                updateStatus("等待语音输入...", "");
+            }
+        }
+        
+        // 使用浏览器的语音合成播放文本
+        async function playTextAudio(text) {
+            addLog("使用浏览器语音合成播放文本");
+            
+            // 模拟波形活动
+            let speakingInterval = setInterval(() => {
+                const level = 0.5 + Math.random() * 0.5;
+                updateWaveform(level);
+            }, 100);
+            
             return new Promise((resolve) => {
                 if ('speechSynthesis' in window) {
-                    addLog("进入使用Web Speech API模拟播放分支");
                     const utterance = new SpeechSynthesisUtterance(text);
                     
-                    // 设置声音参数，解决iOS兼容性问题
+                    // 设置声音参数
                     utterance.volume = 1.0;
                     utterance.rate = 1.0;
                     utterance.pitch = 1.0;
                     utterance.lang = 'zh-CN';
                     
-                    // 在iOS上，声音可能被静音，需要处理静音状态
                     utterance.onstart = () => {
                         addLog("语音合成开始播放");
                     };
@@ -659,6 +815,8 @@
                             }
                         } catch (e) {
                             addLog(`语音合成异常: ${e.message}`);
+                            clearInterval(speakingInterval);
+                            updateWaveform(0);
                             resolve();
                         }
                     }, 100);

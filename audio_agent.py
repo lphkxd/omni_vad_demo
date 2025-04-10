@@ -67,8 +67,17 @@ class AudioProcessingAgent(Agent):
         super().__init__()
         self.client = get_openai_client()
     
-    def process_audio(self, audio_data: bytes, text_prompt: str = "这段音频在说什么") -> Dict[str, Any]:
-        """处理音频并调用模型获取回复"""
+    def process_audio(self, audio_data: bytes, text_prompt: str = "这段音频在说什么", audio_format: str = "webm") -> Dict[str, Any]:
+        """处理音频并调用模型获取回复
+        
+        Args:
+            audio_data: 音频数据字节
+            text_prompt: 提示文本
+            audio_format: 音频格式，可以是'webm'或'wav'等
+        
+        Returns:
+            包含文本和音频回复的字典
+        """
         start_time = time.time()
         try:
             # 将音频数据编码为base64
@@ -77,7 +86,7 @@ class AudioProcessingAgent(Agent):
             encode_time = time.time() - encode_start
             print(f"音频编码耗时: {encode_time:.2f}秒")
             
-            print(f"发送请求到模型，音频大小: {len(audio_data)} 字节")
+            print(f"发送请求到模型，音频大小: {len(audio_data)} 字节，格式: {audio_format}")
             
             # 调用模型
             model_start = time.time()
@@ -95,7 +104,7 @@ class AudioProcessingAgent(Agent):
                                 "type": "input_audio",
                                 "input_audio": {
                                     "data": f"data:;base64,{base64_audio}",
-                                    "format": "webm",
+                                    "format": audio_format,
                                 },
                             },
                             {"type": "text", "text": text_prompt},

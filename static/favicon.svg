@@ -1,8 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
     <!-- 背景圆形 -->
-    <circle cx="16" cy="16" r="16" fill="#4A90E2"/>
+    <circle cx="32" cy="32" r="30" fill="#0a192f"/>
     
-    <!-- 音频波形 -->
-    <path d="M8 16v-2h2v4h-2v-2zm4-4v-2h2v8h-2v-6zm4 2v-4h2v8h-2v-4zm4-2v-2h2v8h-2v-6zm4 2v-4h2v8h-2v-4z" fill="white"/>
+    <!-- 语音波形 -->
+    <g fill="none" stroke-linecap="round" stroke-width="3">
+        <!-- 中间的波形 -->
+        <path d="M32,14 L32,50" stroke="#00ff9d" />
+        
+        <!-- 两侧的波形 -->
+        <path d="M24,20 L24,44" stroke="#00b4ff" />
+        <path d="M40,20 L40,44" stroke="#00b4ff" />
+        
+        <!-- 外侧的波形 -->
+        <path d="M16,26 L16,38" stroke="#00b4ff" opacity="0.6" />
+        <path d="M48,26 L48,38" stroke="#00b4ff" opacity="0.6" />
+        
+        <!-- 最外侧的波形 -->
+        <path d="M8,30 L8,34" stroke="#00ff9d" opacity="0.4" />
+        <path d="M56,30 L56,34" stroke="#00ff9d" opacity="0.4" />
+    </g>
+    
+    <!-- 装饰性环形 -->
+    <circle cx="32" cy="32" r="30" fill="none" stroke="#00b4ff" stroke-width="1" opacity="0.3" />
+    <circle cx="32" cy="32" r="28" fill="none" stroke="#00ff9d" stroke-width="1" opacity="0.2" />
 </svg> 
