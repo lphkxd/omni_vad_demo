@@ -126,7 +126,7 @@ class AudioProcessingAgent(Agent):
             messages = [
                 {
                     "role": "system",
-                    "content": [{"type": "text", "text": "你是一个友好、专业的AI助手。请用中文回答问题，保持对话的连贯性。"}],
+                    "content": [{"type": "text", "text": "你是一个专业AI助手，简洁回答问题，不要重复用户的问话。"}],
                 },
             ]
             
@@ -147,7 +147,8 @@ class AudioProcessingAgent(Agent):
                             "format": audio_format,
                         },
                     },
-                    {"type": "text", "text": text_prompt},
+                    # 只有当text_prompt不为空时才添加文本提示
+                    *([{"type": "text", "text": text_prompt}] if text_prompt.strip() else []),
                 ],
             })
             
@@ -239,20 +240,29 @@ class AudioProcessingAgent(Agent):
                 response["text"] = transcript_text
                 print(f"使用转录文本作为响应: {transcript_text}")
             
-            # 更新对话历史
+            # 更新对话历史 - 只添加一种信息来源，优先使用转录文本
             if transcript_text:
-                # 添加用户消息（使用转录的文本）
+                # 使用转录的文本作为用户消息
                 self.chat_history.append({
                     "role": "user",
                     "content": [{"type": "text", "text": transcript_text}]
                 })
-            else:
-                # 如果没有转录文本，使用提示文本
+                print(f"添加用户转录文本到历史: {transcript_text}")
+            elif text_prompt and text_prompt.strip():
+                # 只有在有有效提示文本且没有转录时使用提示文本
                 self.chat_history.append({
                     "role": "user", 
                     "content": [{"type": "text", "text": text_prompt}]
                 })
-            
+                print(f"添加用户提示文本到历史: {text_prompt}")
+            else:
+                # 如果两者都没有，添加一个空的用户消息以保持对话连贯性
+                self.chat_history.append({
+                    "role": "user", 
+                    "content": [{"type": "text", "text": "(用户发送了一段音频)"}]
+                })
+                print("添加默认用户消息到历史")
+                
             # 添加助手回复
             self.chat_history.append({
                 "role": "assistant",

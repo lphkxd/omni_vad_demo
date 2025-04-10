@@ -249,7 +249,7 @@ async function processAudio(audioData) {
             },
             body: JSON.stringify({
                 audio_data: base64Audio,
-                text_prompt: "你是一个友好、专业的AI助手。请用中文回答问题，保持对话的连贯性。",
+                text_prompt: "",  // 不再发送重复的系统提示，使用空字符串
                 audio_format: "wav"  // 指定音频格式为wav
             }),
         });
