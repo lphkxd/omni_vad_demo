@@ -2,7 +2,6 @@ import os
 import base64
 import struct
 import time
-import httpx  # 添加httpx库导入
 from agno.agent import Agent
 from openai import OpenAI
 from typing import Dict, Any
@@ -13,11 +12,6 @@ def get_openai_client():
     return OpenAI(
         api_key=os.getenv("DASHSCOPE_API_KEY", ""),
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        timeout=30.0,  # 设置超时时间
-        http_client=httpx.Client(
-            limits=httpx.Limits(max_keepalive_connections=1, keepalive_expiry=120),
-            timeout=30.0,
-        ),  # 保持TCP连接活跃
     )
 
 # 预缓存常用采样率的WAV头

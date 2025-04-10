@@ -19,8 +19,7 @@ dependencies = [
     "agno>=0.1.0",
     "python-multipart>=0.0.6",
     "requests>=2.28.2",
-    "pydantic>=1.10.7",
-    "httpx>=0.25.0"
+    "pydantic>=1.10.7"
 ]
 
 [build-system]
