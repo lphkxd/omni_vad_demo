@@ -19,6 +19,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 设置一些库的日志级别为WARNING，减少非关键日志
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("uvicorn").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
 app = FastAPI(title="音频处理API", description="处理音频并通过大模型获取回复的API服务")
 
 # 添加CORS中间件
@@ -44,7 +49,7 @@ async def process_audio(request: AudioRequest):
     try:
         # 记录请求大小和格式
         request_size = len(request.audio_data)
-        logger.info(f"收到音频数据，大小: {request_size} 字节，格式: {request.audio_format}")
+        logger.info(f"收到音频请求，大小: {request_size} 字节，格式: {request.audio_format}")
         
         # 解码base64音频数据
         decode_start = time.time()
@@ -69,11 +74,13 @@ async def process_audio(request: AudioRequest):
         if response["audio"]:
             audio_size = len(response["audio"])
             logger.info(f"返回音频数据，base64大小: {audio_size} 字节")
-        else:
-            logger.info("没有音频数据返回")
         
         total_time = time.time() - start_time
         logger.info(f"总处理时间: {total_time:.2f}秒")
+        
+        # 记录模型使用情况（如果可用）
+        if response["usage"]:
+            logger.info(f"模型用量: 提示词 {response['usage'].prompt_tokens} 词元，回复 {response['usage'].completion_tokens} 词元，总计 {response['usage'].total_tokens} 词元")
         
         return response
         
@@ -113,8 +120,17 @@ if __name__ == "__main__":
     # 如果证书和密钥文件存在，则启用HTTPS
     ssl_enabled = os.path.exists(ssl_keyfile) and os.path.exists(ssl_certfile)
     
+    workers = min(4, os.cpu_count() or 1)  # 根据CPU核心数设置工作进程数
+    
     if ssl_enabled:
         logger.info(f"使用HTTPS启动服务，证书: {ssl_certfile}, 密钥: {ssl_keyfile}")
+        # 在以下情况下不使用多工作进程
+        if workers > 1:
+            logger.warning("使用SSL时，必须通过命令行启动多工作进程。将使用单进程模式。")
+            logger.info("如需多工作进程，请使用: uvicorn api_server:app --host=0.0.0.0 --port={} --ssl-keyfile={} --ssl-certfile={} --workers={}".format(
+                port, ssl_keyfile, ssl_certfile, workers
+            ))
+            workers = 1
         # 启动HTTPS服务器
         uvicorn.run(app, host="0.0.0.0", port=port, ssl_keyfile=ssl_keyfile, ssl_certfile=ssl_certfile)
     else:
@@ -126,5 +142,11 @@ if __name__ == "__main__":
             "brew install mkcert   # MacOS\n"
             "mkcert -key-file key.pem -cert-file cert.pem localhost 127.0.0.1 ::1 你的IP地址"
         )
+        # 在以下情况下不使用多工作进程
+        if workers > 1:
+            logger.info("要使用{}个工作进程，请使用命令: uvicorn api_server:app --host=0.0.0.0 --port={} --workers={}".format(
+                workers, port, workers
+            ))
+            workers = 1
         # 启动HTTP服务器
         uvicorn.run(app, host="0.0.0.0", port=port) 

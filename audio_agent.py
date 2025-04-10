@@ -5,6 +5,7 @@ import time
 from agno.agent import Agent
 from openai import OpenAI
 from typing import Dict, Any
+from io import BytesIO  # 添加BytesIO导入
 
 # 配置OpenAI客户端
 def get_openai_client():
@@ -69,7 +70,7 @@ class AudioProcessingAgent(Agent):
         # 初始化聊天历史记录
         self.chat_history = []
         # 最大保存的对话轮数
-        self.max_history = 5
+        self.max_history = 5  # 保持5轮对话历史
     
     def process_audio(self, audio_data: bytes, text_prompt: str = "", audio_format: str = "webm") -> Dict[str, Any]:
         """处理音频并调用模型获取回复
@@ -85,6 +86,7 @@ class AudioProcessingAgent(Agent):
         start_time = time.time()
         try:
             # 将音频数据编码为base64
+            # api_server.py中已经处理过base64解码，这里直接使用传入的音频数据
             encode_start = time.time()
             base64_audio = base64.b64encode(audio_data).decode("utf-8")
             encode_time = time.time() - encode_start
@@ -134,6 +136,8 @@ class AudioProcessingAgent(Agent):
             response = {"text": "", "audio": None, "usage": None}
             audio_chunks = []  # 存储原始音频数据块
             transcript_text = ""
+            audio_chunks_count = 0
+            audio_total_size = 0
             
             try:
                 for chunk in completion:
@@ -147,7 +151,9 @@ class AudioProcessingAgent(Agent):
                                     try:
                                         audio_chunk = base64.b64decode(audio_data)
                                         audio_chunks.append(audio_chunk)
-                                        print(f"收到音频数据块，大小: {len(audio_chunk)} 字节")
+                                        audio_chunks_count += 1
+                                        audio_total_size += len(audio_chunk)
+                                        # 简化日志，不再输出每个音频块
                                     except Exception as e:
                                         print(f"解码音频数据块时出错: {e}")
                                 
@@ -155,14 +161,14 @@ class AudioProcessingAgent(Agent):
                                 transcript = chunk.choices[0].delta.audio.get("transcript")
                                 if transcript:
                                     transcript_text += transcript
-                                    print(f"收到转录文本: {transcript}")
+                                    # 简化日志，不再输出每个转录片段
                             except Exception as e:
                                 print(f"处理音频数据时出错: {e}")
                         elif hasattr(chunk.choices[0].delta, "content"):
                             content = chunk.choices[0].delta.content
                             if content:
                                 response["text"] += str(content)
-                                print(f"收到文本内容: {content}")
+                                # 简化日志，不再输出每个文本片段
                     elif hasattr(chunk, "usage"):
                         response["usage"] = chunk.usage
                         print(f"收到用量统计: {chunk.usage}")
@@ -171,15 +177,21 @@ class AudioProcessingAgent(Agent):
                 print(f"处理响应时出错: {e}")
                 raise
             
+            # 在处理完成后输出统计信息
+            print(f"共收到{audio_chunks_count}个音频数据块，总大小: {audio_total_size} 字节")
+            
             model_time = time.time() - model_start
             print(f"模型处理耗时: {model_time:.2f}秒")
 
             # 处理音频数据
             if audio_chunks:
                 try:
-                    # 合并所有音频数据块
+                    # 优化音频数据处理，使用BytesIO减少内存使用
                     audio_process_start = time.time()
-                    raw_audio = b"".join(audio_chunks)
+                    audio_buffer = BytesIO()
+                    for chunk in audio_chunks:
+                        audio_buffer.write(chunk)
+                    raw_audio = audio_buffer.getvalue()
                     # 添加WAV头
                     wav_audio = add_wav_header(raw_audio)
                     # 编码为base64
@@ -217,9 +229,19 @@ class AudioProcessingAgent(Agent):
                 "content": [{"type": "text", "text": response["text"]}]
             })
             
-            # 保持历史长度在限制范围内
-            if len(self.chat_history) > self.max_history * 2:  # 每轮对话有2条消息
+            # 保持历史长度在限制范围内，超过5轮就抛弃前面的对话
+            MAX_TEXT_LENGTH = 1000  # 每条消息最大字符数
+            if len(self.chat_history) > self.max_history * 2:  # 每轮对话有2条消息（用户+助手）
+                # 只保留最近的5轮对话
                 self.chat_history = self.chat_history[-self.max_history*2:]
+                print(f"对话历史超过{self.max_history}轮，已删除最早的对话")
+            
+            # 限制每条消息的文本长度以控制内存使用
+            for msg in self.chat_history:
+                if "content" in msg and isinstance(msg["content"], list):
+                    for item in msg["content"]:
+                        if item.get("type") == "text" and len(item.get("text", "")) > MAX_TEXT_LENGTH:
+                            item["text"] = item["text"][:MAX_TEXT_LENGTH] + "..."
             
             total_time = time.time() - start_time
             print(f"总处理时间: {total_time:.2f}秒")
