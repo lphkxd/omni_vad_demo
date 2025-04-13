@@ -2,9 +2,11 @@ import os
 import base64
 import struct
 import time
+import json
+import asyncio
 from agno.agent import Agent
 from openai import OpenAI
-from typing import Dict, Any
+from typing import Dict, Any, AsyncGenerator, List, Union, Optional
 from io import BytesIO  # 添加BytesIO导入
 
 # 配置OpenAI客户端
@@ -13,6 +15,15 @@ def get_openai_client():
         api_key=os.getenv("DASHSCOPE_API_KEY", ""),
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     )
+
+# 系统提示词
+SYSTEM_PROMPT = """# 角色设定
+你将扮演一个礼貌且乐于助人的人工电话销售客服，姓名：悠悠跑腿电话客服，年龄30岁，女，，专门为一家名为UU跑腿公司提供服务，主要通过电话引导未认证过的用户进行认证，语气沉稳专业，不要有AI语气、模拟真人自然对话。
+你的专业是：悠悠跑腿电话客服 + 引导未认证的跑男账号进行认证 +鼓励跑男接单。
+
+# 对话主题
+- 邀请未认证的跑男积极进行认证。
+- 鼓励跑男认证后多多接单。，不要重复用户的问话,模拟真实用户的口吻。不要有 aI 味。"""
 
 # 预缓存常用采样率的WAV头
 WAV_HEADERS = {}
@@ -98,9 +109,100 @@ class AudioProcessingAgent(Agent):
         self.chat_history = []
         # 最大保存的对话轮数
         self.max_history = 5  # 保持5轮对话历史
+        # 文本长度限制
+        self.max_text_length = 1000  # 每条消息最大字符数
+    
+    def _prepare_messages(self, audio_data: bytes, text_prompt: str = "", audio_format: str = "webm") -> List[Dict[str, Any]]:
+        """准备发送给模型的消息列表
+        
+        Args:
+            audio_data: 音频数据字节
+            text_prompt: 提示文本
+            audio_format: 音频格式
+            
+        Returns:
+            准备好的消息列表
+        """
+        # 构建消息列表，包含历史记录
+        messages = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": SYSTEM_PROMPT}],
+            },
+        ]
+        
+        # 添加历史消息
+        for msg in self.chat_history:
+            messages.append(msg)
+            
+        # 添加当前用户消息
+        base64_audio = base64.b64encode(audio_data).decode("utf-8")
+        messages.append({
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_audio",
+                    "input_audio": {
+                        "data": f"data:;base64,{base64_audio}",
+                        "format": audio_format,
+                    },
+                },
+                # 只有当text_prompt不为空时才添加文本提示
+                *([{"type": "text", "text": text_prompt}] if text_prompt.strip() else []),
+            ],
+        })
+        
+        return messages
+    
+    def _update_chat_history(self, user_text: str, assistant_text: str, text_prompt: str = ""):
+        """更新聊天历史
+        
+        Args:
+            user_text: 用户消息文本（转录或提示）
+            assistant_text: 助手回复文本
+            text_prompt: 原始提示文本
+        """
+        # 添加用户消息到历史
+        if user_text:
+            self.chat_history.append({
+                "role": "user",
+                "content": [{"type": "text", "text": user_text}]
+            })
+            print(f"添加用户文本到历史: {user_text}")
+        elif text_prompt and text_prompt.strip():
+            self.chat_history.append({
+                "role": "user", 
+                "content": [{"type": "text", "text": text_prompt}]
+            })
+            print(f"添加用户提示文本到历史: {text_prompt}")
+        else:
+            self.chat_history.append({
+                "role": "user", 
+                "content": [{"type": "text", "text": "(用户发送了一段音频)"}]
+            })
+            print("添加默认用户消息到历史")
+            
+        # 添加助手回复
+        self.chat_history.append({
+            "role": "assistant",
+            "content": [{"type": "text", "text": assistant_text}]
+        })
+        
+        # 保持历史长度在限制范围内
+        if len(self.chat_history) > self.max_history * 2:  # 每轮对话有2条消息（用户+助手）
+            # 只保留最近的对话
+            self.chat_history = self.chat_history[-self.max_history*2:]
+            print(f"对话历史超过{self.max_history}轮，已删除最早的对话")
+        
+        # 限制每条消息的文本长度以控制内存使用
+        for msg in self.chat_history:
+            if "content" in msg and isinstance(msg["content"], list):
+                for item in msg["content"]:
+                    if item.get("type") == "text" and len(item.get("text", "")) > self.max_text_length:
+                        item["text"] = item["text"][:self.max_text_length] + "..."
     
     def process_audio(self, audio_data: bytes, text_prompt: str = "", audio_format: str = "webm") -> Dict[str, Any]:
-        """处理音频并调用模型获取回复
+        """处理音频并调用模型获取回复（同步方法）
         
         Args:
             audio_data: 音频数据字节
@@ -112,39 +214,10 @@ class AudioProcessingAgent(Agent):
         """
         start_time = time.time()
         try:
-            # api_server.py中已经处理了base64解码，直接使用传入的音频数据
-            # 移除重复的base64编码操作
             print(f"发送请求到模型，音频大小: {len(audio_data)} 字节，格式: {audio_format}")
             
-            # 构建消息列表，包含历史记录
-            messages = [
-                {
-                    "role": "system",
-                    "content": [{"type": "text", "text": "你是一个专业AI助手，简洁回答问题，不要重复用户的问话。"}],
-                },
-            ]
-            
-            # 添加历史消息
-            for msg in self.chat_history:
-                messages.append(msg)
-                
-            # 添加当前用户消息
-            # 这里仍需要编码，因为API需要base64格式
-            base64_audio = base64.b64encode(audio_data).decode("utf-8")
-            messages.append({
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_audio",
-                        "input_audio": {
-                            "data": f"data:;base64,{base64_audio}",
-                            "format": audio_format,
-                        },
-                    },
-                    # 只有当text_prompt不为空时才添加文本提示
-                    *([{"type": "text", "text": text_prompt}] if text_prompt.strip() else []),
-                ],
-            })
+            # 准备消息
+            messages = self._prepare_messages(audio_data, text_prompt, audio_format)
             
             # 调用模型
             model_start = time.time()
@@ -178,7 +251,6 @@ class AudioProcessingAgent(Agent):
                                         audio_chunks.append(audio_chunk)
                                         audio_chunks_count += 1
                                         audio_total_size += len(audio_chunk)
-                                        # 简化日志，不再输出每个音频块
                                     except Exception as e:
                                         print(f"解码音频数据块时出错: {e}")
                                 
@@ -186,14 +258,12 @@ class AudioProcessingAgent(Agent):
                                 transcript = chunk.choices[0].delta.audio.get("transcript")
                                 if transcript:
                                     transcript_text += transcript
-                                    # 简化日志，不再输出每个转录片段
                             except Exception as e:
                                 print(f"处理音频数据时出错: {e}")
                         elif hasattr(chunk.choices[0].delta, "content"):
                             content = chunk.choices[0].delta.content
                             if content:
                                 response["text"] += str(content)
-                                # 简化日志，不再输出每个文本片段
                     elif hasattr(chunk, "usage"):
                         response["usage"] = chunk.usage
                         print(f"收到用量统计: {chunk.usage}")
@@ -234,48 +304,9 @@ class AudioProcessingAgent(Agent):
                 response["text"] = transcript_text
                 print(f"使用转录文本作为响应: {transcript_text}")
             
-            # 更新对话历史 - 只添加一种信息来源，优先使用转录文本
-            if transcript_text:
-                # 使用转录的文本作为用户消息
-                self.chat_history.append({
-                    "role": "user",
-                    "content": [{"type": "text", "text": transcript_text}]
-                })
-                print(f"添加用户转录文本到历史: {transcript_text}")
-            elif text_prompt and text_prompt.strip():
-                # 只有在有有效提示文本且没有转录时使用提示文本
-                self.chat_history.append({
-                    "role": "user", 
-                    "content": [{"type": "text", "text": text_prompt}]
-                })
-                print(f"添加用户提示文本到历史: {text_prompt}")
-            else:
-                # 如果两者都没有，添加一个空的用户消息以保持对话连贯性
-                self.chat_history.append({
-                    "role": "user", 
-                    "content": [{"type": "text", "text": "(用户发送了一段音频)"}]
-                })
-                print("添加默认用户消息到历史")
-                
-            # 添加助手回复
-            self.chat_history.append({
-                "role": "assistant",
-                "content": [{"type": "text", "text": response["text"]}]
-            })
-            
-            # 保持历史长度在限制范围内，超过5轮就抛弃前面的对话
-            MAX_TEXT_LENGTH = 1000  # 每条消息最大字符数
-            if len(self.chat_history) > self.max_history * 2:  # 每轮对话有2条消息（用户+助手）
-                # 只保留最近的5轮对话
-                self.chat_history = self.chat_history[-self.max_history*2:]
-                print(f"对话历史超过{self.max_history}轮，已删除最早的对话")
-            
-            # 限制每条消息的文本长度以控制内存使用
-            for msg in self.chat_history:
-                if "content" in msg and isinstance(msg["content"], list):
-                    for item in msg["content"]:
-                        if item.get("type") == "text" and len(item.get("text", "")) > MAX_TEXT_LENGTH:
-                            item["text"] = item["text"][:MAX_TEXT_LENGTH] + "..."
+            # 更新对话历史 - 选择合适的信息来源
+            final_user_text = transcript_text if transcript_text else text_prompt
+            self._update_chat_history(final_user_text, response["text"], text_prompt)
             
             total_time = time.time() - start_time
             print(f"总处理时间: {total_time:.2f}秒")
@@ -292,6 +323,136 @@ class AudioProcessingAgent(Agent):
         """清除对话历史"""
         self.chat_history = []
         print("对话历史已清除")
+
+    async def stream_audio(self, audio_data: bytes, text_prompt: str = "", audio_format: str = "webm") -> AsyncGenerator[str, None]:
+        """处理音频并以流式方式返回响应（异步流式方法）
+        
+        Args:
+            audio_data: 音频数据字节
+            text_prompt: 提示文本
+            audio_format: 音频格式，可以是'webm'或'wav'等
+        
+        Yields:
+            服务器发送的事件格式字符串，包含文本或音频数据
+        """
+        start_time = time.time()
+        try:
+            print(f"发送流式请求到模型，音频大小: {len(audio_data)} 字节，格式: {audio_format}")
+            
+            # 准备消息
+            messages = self._prepare_messages(audio_data, text_prompt, audio_format)
+            
+            # 调用模型
+            model_start = time.time()
+            completion = self.client.chat.completions.create(
+                model="qwen-omni-turbo",
+                messages=messages,
+                modalities=["text", "audio"],
+                audio={"voice": "Chelsie", "format": "wav"},
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+            
+            # 处理响应
+            transcript_text = ""
+            full_text_response = ""
+            audio_chunks_count = 0
+            audio_total_size = 0
+            
+            try:
+                for chunk in completion:
+                    # 等待一小段时间以减轻服务器压力
+                    await asyncio.sleep(0.01)
+                    
+                    if chunk.choices:
+                        if hasattr(chunk.choices[0].delta, "audio"):
+                            try:
+                                # 获取音频数据
+                                audio_data = chunk.choices[0].delta.audio.get("data")
+                                if audio_data:
+                                    # 解码并添加WAV头
+                                    try:
+                                        audio_chunk = base64.b64decode(audio_data)
+                                        audio_chunks_count += 1
+                                        audio_total_size += len(audio_chunk)
+                                        
+                                        # 把原始PCM添加WAV头
+                                        wav_chunk = add_wav_header(audio_chunk)
+                                        # 重新编码为base64
+                                        b64_chunk = base64.b64encode(wav_chunk).decode('utf-8')
+                                        # 以服务器发送事件的格式返回
+                                        event_data = {
+                                            "event": "audio",
+                                            "data": b64_chunk
+                                        }
+                                        yield f"data: {json.dumps(event_data)}\n\n"
+                                    except Exception as e:
+                                        print(f"流式处理音频数据块时出错: {e}")
+                                
+                                # 获取转录文本
+                                transcript = chunk.choices[0].delta.audio.get("transcript")
+                                if transcript:
+                                    transcript_text += transcript
+                            except Exception as e:
+                                print(f"处理音频数据时出错: {e}")
+                        elif hasattr(chunk.choices[0].delta, "content"):
+                            content = chunk.choices[0].delta.content
+                            if content:
+                                full_text_response += str(content)
+                                # 以服务器发送事件的格式返回文本
+                                event_data = {
+                                    "event": "text",
+                                    "data": str(content)
+                                }
+                                yield f"data: {json.dumps(event_data)}\n\n"
+                    elif hasattr(chunk, "usage"):
+                        # 返回用量统计
+                        event_data = {
+                            "event": "usage",
+                            "data": {
+                                "prompt_tokens": chunk.usage.prompt_tokens,
+                                "completion_tokens": chunk.usage.completion_tokens,
+                                "total_tokens": chunk.usage.total_tokens
+                            }
+                        }
+                        yield f"data: {json.dumps(event_data)}\n\n"
+                        print(f"流式响应用量统计: {chunk.usage}")
+                
+                # 发送完成事件
+                yield f"data: {json.dumps({'event': 'done'})}\n\n"
+                
+                # 输出统计信息
+                print(f"共处理{audio_chunks_count}个音频数据块，总大小: {audio_total_size} 字节")
+                
+            except Exception as e:
+                print(f"流式处理响应时出错: {e}")
+                # 返回错误事件
+                event_data = {
+                    "event": "error",
+                    "data": str(e)
+                }
+                yield f"data: {json.dumps(event_data)}\n\n"
+                raise
+            
+            # 更新对话历史
+            final_response_text = full_text_response if full_text_response else transcript_text
+            
+            # 更新对话历史 - 选择合适的信息来源
+            final_user_text = transcript_text if transcript_text else text_prompt
+            self._update_chat_history(final_user_text, final_response_text, text_prompt)
+            
+            total_time = time.time() - start_time
+            print(f"流式处理总时间: {total_time:.2f}秒")
+            
+        except Exception as e:
+            print(f"流式处理音频时出错: {e}")
+            # 返回错误事件
+            event_data = {
+                "event": "error",
+                "data": str(e)
+            }
+            yield f"data: {json.dumps(event_data)}\n\n"
+            raise
 
 # 实例化Agent
 audio_agent = AudioProcessingAgent()

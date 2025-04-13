@@ -3,11 +3,11 @@ import base64
 import uvicorn
 import time
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
-from fastapi.responses import JSONResponse, Response, RedirectResponse
+from fastapi.responses import JSONResponse, Response, RedirectResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
-from typing import Optional
+from typing import Optional, AsyncGenerator
 from pydantic import BaseModel
 import logging
 
@@ -96,6 +96,27 @@ async def process_audio(request: AudioRequest):
         
     except Exception as e:
         logger.error(f"处理音频时出错: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/stream_audio")
+async def stream_audio(request: AudioRequest):
+    """处理音频并以流式方式返回响应"""
+    try:
+        # 记录请求信息
+        request_size = len(request.audio_data)
+        logger.info(f"收到流式音频请求，大小: {request_size} 字节，格式: {request.audio_format}")
+        
+        # 解码base64音频数据
+        audio_bytes = base64.b64decode(request.audio_data)
+        
+        # 创建响应流
+        return StreamingResponse(
+            audio_agent.stream_audio(audio_bytes, request.text_prompt, request.audio_format),
+            media_type="text/event-stream"
+        )
+        
+    except Exception as e:
+        logger.error(f"流式处理音频时出错: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/clear_history")

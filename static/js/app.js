@@ -4,11 +4,17 @@ let audioContext = null;
 let isProcessing = false;
 let isVADPaused = false;
 let waveBars = [];
+let audioQueue = []; // 用于流式播放的音频队列
+let isAudioPlaying = false; // 表示是否正在播放音频
+let audioContext2 = null; // 用于流式播放的音频上下文
+let sseConnection = null; // 用于流式连接
 
 // API配置
 const apiConfig = {
     apiUrl: window.location.origin, // 使用当前域名作为API的基础URL
     processingEndpoint: '/process_audio',
+    streamEndpoint: '/stream_audio', // 新增流式处理端点
+    useStream: true, // 默认启用流式处理
     debug: true
 };
 
@@ -241,33 +247,39 @@ async function processAudio(audioData) {
         updateStatus("处理中...", "processing");
         hideError(); // 清除任何显示的错误
         
-        // 发送API请求，并指定音频格式为wav
-        const response = await fetch('/process_audio', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                audio_data: base64Audio,
-                text_prompt: "",  // 不再发送重复的系统提示，使用空字符串
-                audio_format: "wav"  // 指定音频格式为wav
-            }),
-        });
-        
-        if (!response.ok) {
-            const errorMsg = `服务器错误: ${response.status} ${response.statusText}`;
-            showError(errorMsg);
-            throw new Error(errorMsg);
+        // 判断是使用流式请求还是常规请求
+        if (apiConfig.useStream !== false) {
+            // 使用流式请求
+            return await streamAudio(base64Audio, 'wav');
+        } else {
+            // 使用常规请求
+            // 发送API请求，并指定音频格式为wav
+            const response = await fetch('/process_audio', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    audio_data: base64Audio,
+                    audio_format: 'wav'
+                }),
+            });
+            
+            if (!response.ok) {
+                const errorMsg = `服务器错误: ${response.status} ${response.statusText}`;
+                showError(errorMsg);
+                throw new Error(errorMsg);
+            }
+            
+            const result = await response.json();
+            addLog(`收到API响应: 文本长度: ${result.text.length} 字符`);
+            
+            if (result.audio) {
+                addLog(`收到音频响应，大小: ${result.audio.length} 字符`);
+            }
+            
+            return result;
         }
-        
-        const result = await response.json();
-        addLog(`收到API响应: 文本长度: ${result.text.length} 字符`);
-        
-        if (result.audio) {
-            addLog(`收到音频响应，大小: ${result.audio.length} 字符`);
-        }
-        
-        return result;
     } catch (error) {
         addLog(`处理音频请求出错: ${error.message}`);
         showError(`处理错误: ${error.message}`);
@@ -276,6 +288,211 @@ async function processAudio(audioData) {
         }
         throw error;
     }
+}
+
+// 流式处理音频
+async function streamAudio(base64Audio, audioFormat = 'wav') {
+    try {
+        updateStatus("开始流式请求...", "processing");
+        
+        // 重置状态
+        audioQueue = [];
+        isAudioPlaying = false;
+        let accumulatedText = '';
+        
+        // 清理之前可能存在的连接
+        if (sseConnection) {
+            sseConnection.close();
+            sseConnection = null;
+        }
+        
+        // 添加日志
+        addLog("开始流式音频请求");
+        
+        // 创建响应读取器
+        const response = await fetch(`${apiConfig.apiUrl}/stream_audio`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                audio_data: base64Audio,
+                audio_format: audioFormat
+            })
+        });
+        
+        if (!response.ok) {
+            const errorMsg = `流式请求错误: ${response.status} ${response.statusText}`;
+            showError(errorMsg);
+            throw new Error(errorMsg);
+        }
+        
+        // 创建一个空的AI回复用于更新
+        addConversation('ai', '');
+        
+        // 获取响应的reader
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        
+        // 处理流式响应
+        while (true) {
+            const { done, value } = await reader.read();
+            
+            if (done) {
+                addLog("流式读取完成");
+                break;
+            }
+            
+            // 解码接收到的数据
+            const text = decoder.decode(value, { stream: true });
+            buffer += text;
+            
+            // 处理缓冲区中的每个完整事件
+            let eventEnd = buffer.indexOf('\n\n');
+            while (eventEnd !== -1) {
+                const eventText = buffer.substring(0, eventEnd);
+                buffer = buffer.substring(eventEnd + 2);
+                
+                // 处理事件文本
+                if (eventText.startsWith('data: ')) {
+                    const eventData = eventText.substring(6);
+                    try {
+                        const data = JSON.parse(eventData);
+                        
+                        // 根据事件类型处理
+                        switch (data.event) {
+                            case 'text':
+                                // 处理文本事件
+                                accumulatedText += data.data;
+                                // 更新UI中的文本
+                                const textElem = document.querySelector('.ai-message:last-child .message-text');
+                                if (textElem) {
+                                    textElem.textContent = accumulatedText;
+                                }
+                                break;
+                                
+                            case 'audio':
+                                // 处理音频事件，添加到队列
+                                audioQueue.push(data.data);
+                                
+                                // 如果还没有开始播放，就开始播放
+                                if (!isAudioPlaying) {
+                                    await playNextInQueue();
+                                }
+                                break;
+                                
+                            case 'usage':
+                                // 处理用量统计
+                                addLog(`模型用量: 提示词 ${data.data.prompt_tokens}，回复 ${data.data.completion_tokens}，总计 ${data.data.total_tokens}`);
+                                break;
+                                
+                            case 'error':
+                                // 处理错误
+                                showError(`流处理错误: ${data.data}`);
+                                addLog(`流处理错误: ${data.data}`);
+                                break;
+                                
+                            case 'done':
+                                // 处理完成
+                                addLog("流处理完成");
+                                updateStatus("处理完成", "complete");
+                                break;
+                        }
+                    } catch (e) {
+                        addLog(`解析事件数据时出错: ${e.message}`);
+                        console.error("解析事件数据时出错:", e, eventData);
+                    }
+                }
+                
+                // 查找下一个事件的结束位置
+                eventEnd = buffer.indexOf('\n\n');
+            }
+        }
+        
+        // 更新状态
+        updateStatus("流式处理完成", "complete");
+        
+        // 返回结果
+        return {
+            text: accumulatedText,
+            audio: null // 已经通过流式播放了
+        };
+    } catch (error) {
+        console.error("流式处理音频出错:", error);
+        showError(`流式处理音频出错: ${error.message}`);
+        addLog(`流式处理音频出错: ${error.message}`);
+        return null;
+    }
+}
+
+// 播放队列中的下一个音频
+async function playNextInQueue() {
+    if (audioQueue.length === 0) {
+        isAudioPlaying = false;
+        return;
+    }
+    
+    isAudioPlaying = true;
+    
+    try {
+        // 从队列中取出第一个音频
+        const base64Audio = audioQueue.shift();
+        
+        // 播放这个音频
+        await playStreamAudio(base64Audio);
+        
+        // 播放完成后继续播放下一个
+        await playNextInQueue();
+    } catch (error) {
+        console.error("播放队列音频出错:", error);
+        isAudioPlaying = false;
+    }
+}
+
+// 播放单个流音频片段
+async function playStreamAudio(base64Audio) {
+    return new Promise((resolve, reject) => {
+        try {
+            // 创建音频上下文（如果还不存在）
+            if (!audioContext2) {
+                audioContext2 = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            // 解码base64
+            const binaryString = window.atob(base64Audio);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            
+            // 解码音频数据
+            audioContext2.decodeAudioData(
+                bytes.buffer,
+                (buffer) => {
+                    // 创建音频源
+                    const source = audioContext2.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(audioContext2.destination);
+                    
+                    // 监听播放完成事件
+                    source.onended = () => {
+                        resolve();
+                    };
+                    
+                    // 开始播放
+                    source.start(0);
+                },
+                (error) => {
+                    console.error("解码音频数据出错:", error);
+                    reject(error);
+                }
+            );
+        } catch (error) {
+            console.error("播放音频片段出错:", error);
+            reject(error);
+        }
+    });
 }
 
 // 播放Base64编码的音频
